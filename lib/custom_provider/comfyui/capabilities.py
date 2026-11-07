@@ -49,8 +49,11 @@ class BindingCapabilities:
     ``last_frame`` 是「支持」而非「要求」：绑了尾帧的 workflow 在用户没给尾帧时照常出片，那一格
     由构造层按参考图同一套改图规则摘掉。
 
-    参考音频三项与 ``max_prompt_chars`` 不在此列：绑定表里没有对应的语义键，声明任何值都是凭空
-    捏造，投影处按 ``VideoCapabilities`` 的默认值留空。
+    参考音频三项由 ``reference_audio`` 语义键推导：绑定了目标即 ``direct``（工作流把音频文件
+    作为参考素材直传），段数上限等于绑定目标数——与 ``max_reference_images`` 的同名推导同构。
+    总时长不设聚合上限（``None``）：ComfyUI 侧由音频 VAE 编码进 latent，没有供应商式的秒数上限，
+    段数上限已由目标数封顶。``max_prompt_chars`` 不属于绑定表事实，投影处按 ``VideoCapabilities``
+    的默认值留空。
     """
 
     text_to_video: bool
@@ -58,6 +61,9 @@ class BindingCapabilities:
     last_frame: bool
     max_reference_images: int
     audio_track: AudioTrack
+    reference_audio_mode: Literal["none", "direct"] = "none"
+    max_reference_audio_count: int = 0
+    max_reference_audio_total_seconds: float | None = None
 
 
 def derive_video_capabilities(definition: Mapping[str, Any]) -> BindingCapabilities:
@@ -65,12 +71,15 @@ def derive_video_capabilities(definition: Mapping[str, Any]) -> BindingCapabilit
     bindings: Mapping[str, Any] = definition["bindings"]
     workflow: Mapping[str, Any] = definition["workflow"]
     has_image_input = any(targets_of(bindings.get(key)) for key in _IMAGE_BINDING_KEYS)
+    audio_targets = targets_of(bindings.get("reference_audio"))
     return BindingCapabilities(
         text_to_video=not has_image_input,
         first_frame=bool(targets_of(bindings.get("start_image"))),
         last_frame=bool(targets_of(bindings.get("end_image"))),
         max_reference_images=len(targets_of(bindings.get("reference_images"))),
         audio_track=derive_audio_track(workflow, bindings),
+        reference_audio_mode="direct" if audio_targets else "none",
+        max_reference_audio_count=len(audio_targets),
     )
 
 

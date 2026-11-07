@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -63,6 +64,7 @@ class MediaInputs:
     start_image: str | None = None
     end_image: str | None = None
     reference_images: Sequence[str] = ()
+    reference_audios: Sequence[str] = ()
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,7 @@ def build_workflow(
     dropped = _apply_media(workflow, bindings, media or MediaInputs(), load_inference_rules(media_type))
 
     body, avoid_text = split_avoid_lines(prompt)
-    _write_all(workflow, _targets(bindings.get("prompt")), body)
+    _write_all(workflow, _targets(bindings.get("prompt")), _localize_reference_tags(body))
     _write_negative_prompt(workflow, bindings.get("negative_prompt"), avoid_text)
     width, height = _write_size(workflow, bindings, aspect_ratio=aspect_ratio, resolution=resolution, media=media_type)
     # 图自己写着片长、而这份片长凑不出一档原生时长时不动帧数：端点对外说的正是「时长不由
@@ -133,6 +135,22 @@ def build_workflow(
         negative_prompt=avoid_text,
         dropped_nodes=dropped,
     )
+
+
+#: 参考素材记号 → ComfyUI 侧模型（MiniMax H3 家族）的标签约定。
+_REFERENCE_TAG_PATTERN = re.compile(r"@(图片|音频)(\d+)")
+_REFERENCE_TAG_KINDS = {"图片": "Picture", "音频": "Audio"}
+
+
+def _localize_reference_tags(prompt: str) -> str:
+    """把参考生视频渲染出的 ``@图片N`` / ``@音频N`` 记号换成 ComfyUI 模型的标签写法。
+
+    ArcReel 的参考生视频渲染用 ``@图片N`` / ``@音频N`` 指向随请求发出的参考素材；ComfyUI 侧的
+    MiniMax H3 条件节点按 ``<Picture i>`` / ``<Audio j>`` 索引同一批素材。两种写法表达同一件事，
+    差别只在方言：不转换时模型读不懂编号，参考音频就只剩下「挂上了但没被引用」的弱条件。
+    只替换这两类完整记号，``@[名称]`` 等其它 mention 原样保留。
+    """
+    return _REFERENCE_TAG_PATTERN.sub(lambda m: f"<{_REFERENCE_TAG_KINDS[m.group(1)]} {m.group(2)}>", prompt)
 
 
 def workflow_sha256(workflow: Mapping[str, Any]) -> str:
@@ -351,6 +369,7 @@ def _apply_media(
     doomed.extend(
         _apply_reference_images(workflow, _targets(bindings.get("reference_images")), media.reference_images, rules)
     )
+    _apply_reference_audio(workflow, _targets(bindings.get("reference_audio")), media.reference_audios)
     if not doomed:
         return ()
     return _drop_nodes(workflow, doomed, output_nodes=_output_nodes(bindings), rules=rules)
@@ -395,6 +414,22 @@ def _adjustable(target: Mapping[str, Any], rules: InferenceRules) -> bool:
     if not isinstance(class_type, str) or not isinstance(input_name, str):
         return False
     return rules.adjustable_input(class_type, input_name)
+
+
+def _apply_reference_audio(
+    workflow: dict[str, Any],
+    targets: Sequence[Mapping[str, Any]],
+    values: Sequence[str],
+) -> None:
+    """按段数填参考音频，只填前 N 个目标。
+
+    参考音频没有「张数不足就重复上一张」的语义：重复一段音色参考不会加强约束，只会在参考
+    序列里多出一段同源素材。目标多于本次携带的段数时，多余的格保留下发文件里的字面占位值
+    （部署侧应放入静音音频），不做删节点处理——参考音频挂在可选入口上，删除级联的收益与
+    风险不成比例。
+    """
+    for index in range(min(len(targets), len(values))):
+        _write_one(workflow, targets[index], values[index])
 
 
 def _output_nodes(bindings: Mapping[str, Any]) -> frozenset[str]:

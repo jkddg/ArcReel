@@ -28,6 +28,7 @@ from uuid import uuid4
 import httpx
 
 from arcreel_market_core.video_backend_contract import (
+    ReferenceAudioMode,
     ResumeExpiredError,
     VideoAudioMode,
     VideoCapabilities,
@@ -208,7 +209,11 @@ class ComfyuiVideoBackend(ProviderJobIdPersistenceMixin):
     async def _upload_media(
         self, http: httpx.AsyncClient, request: VideoGenerationRequest, *, job_label: str
     ) -> MediaInputs:
-        """上传绑定的首尾帧，以及已通过槽位容量校验的全部参考图。"""
+        """上传绑定的首尾帧、已通过槽位容量校验的全部参考图，以及全部参考音频。
+
+        音频与图片共用 ComfyUI 的 ``/upload/image`` 通道：服务端只把上传当成「往 input 目录放
+        一个文件」，读音频的 ``LoadAudio`` 节点认的是同一份引用名。
+        """
         bindings: Mapping[str, Any] = self._definition.get("bindings") or {}
         start = await self._upload_one(http, request.start_image, bindings, "start_image", job_label=job_label)
         end = await self._upload_one(http, request.end_image, bindings, "end_image", job_label=job_label)
@@ -219,7 +224,19 @@ class ComfyuiVideoBackend(ProviderJobIdPersistenceMixin):
                     http, path, filename=upload_filename(job_label, "reference_images", path, index)
                 )
             )
-        return MediaInputs(start_image=start, end_image=end, reference_images=tuple(references))
+        audios: list[str] = []
+        for index, path in enumerate(request.reference_audio_files or []):
+            audios.append(
+                await self._client.upload_image(
+                    http, path, filename=upload_filename(job_label, "reference_audio", path, index)
+                )
+            )
+        return MediaInputs(
+            start_image=start,
+            end_image=end,
+            reference_images=tuple(references),
+            reference_audios=tuple(audios),
+        )
 
     async def _upload_one(
         self,
@@ -247,7 +264,9 @@ def binding_video_capabilities(definition: Mapping[str, Any]) -> VideoCapabiliti
     （``endpoints.comfyui_endpoint_spec``）与 backend 自己的声明共用这一份，两处不各写一份——
     它们各自喂给能力闸门的不同一段，说的却必须是同一件事。
 
-    参考音频三项与 ``max_prompt_chars`` 保持默认：绑定表里没有对应的语义键。
+    参考音频三项随 ``reference_audio`` 绑定进入这里：绑定存在即 ``direct``（工作流把音频文件
+    当参考素材直传），段数上限取目标数。这与 ``max_reference_images`` 的装箱同构，能力闸门、
+    提示词挂线与请求构造因此读到的是同一份声明。
     """
     bound = derive_video_capabilities(definition)
     return VideoCapabilities(
@@ -256,4 +275,7 @@ def binding_video_capabilities(definition: Mapping[str, Any]) -> VideoCapabiliti
         last_frame=bound.last_frame,
         max_reference_images=bound.max_reference_images,
         audio_track=VideoAudioMode(bound.audio_track),
+        reference_audio_mode=ReferenceAudioMode(bound.reference_audio_mode),
+        max_reference_audio_count=bound.max_reference_audio_count,
+        max_reference_audio_total_seconds=bound.max_reference_audio_total_seconds,
     )

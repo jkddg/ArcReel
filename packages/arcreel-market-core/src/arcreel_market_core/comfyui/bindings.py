@@ -22,6 +22,7 @@ VIDEO_BINDING_KEYS = (
     "start_image",
     "end_image",
     "reference_images",
+    "reference_audio",
     "width",
     "height",
     "frames",
