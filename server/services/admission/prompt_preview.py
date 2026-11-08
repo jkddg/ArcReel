@@ -8,8 +8,9 @@
 warning，用户在生成前就能看到有参考图不会随请求发出。视频侧按执行期同一口径备齐创作类型与
 声音绑定。
 
-只读：不向供应商发请求、不产生费用、不写产物清单。参考生视频路径的 unit 正文本身即提示词
-主体，其预览走 ``lib.script.reference_video.script_preview``，不经本模块。
+只读：不向供应商发请求、不产生费用、不写产物清单。参考生视频单元的正文本身即提示词主体，
+其预览走 ``preview_reference_unit_prompt``（内部复用 ``reference_prompt_preview`` 的渲染出口），
+不经分镜图侧。
 """
 
 from __future__ import annotations
@@ -26,12 +27,16 @@ from lib.artifacts.generation_input import (
     project_input_observation,
     storyboard_image_input,
 )
+from lib.i18n import _ as translate
+from lib.i18n.display_names import DisplayNames
 from lib.infra.async_thread import run_sync_transaction
 from lib.project.project_manager import ProjectManager, get_project_manager
 from lib.prompts.prompt_utils import render_storyboard_video_prompt
+from lib.script.reference_video.request_projection import project_reference_unit_request
 from lib.script.script_models import resolve_content_mode
 from lib.script.storyboard_sequence import find_storyboard_item, get_storyboard_items
 from server.services.admission.reference_admission import input_refusal_error
+from server.services.admission.reference_prompt_preview import render_reference_prompt_preview
 from server.services.admission.video_batch_admission import resolve_voice_context
 from server.services.tasks.generation_context import ImageLaneRequest, resolve_generation_context
 
@@ -226,12 +231,93 @@ async def preview_item_prompts(
     return await asyncio.to_thread(_render_both)
 
 
+@dataclass(frozen=True)
+class ReferencePromptPreview:
+    """参考生视频单元的最终提示词预览。
+
+    与 :class:`ItemPromptPreview` 不同，reference 单元只有一个自由文本主体，不存在分镜图侧 /
+    视频侧两份提示词；``references`` 是本次请求实际随行的参考图（顺序即 ``@图片N`` 编号）。
+    """
+
+    item_id: str
+    content_mode: str
+    text: str | None
+    unavailable: str | None
+    is_text_form: bool
+    references: tuple[dict[str, Any], ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+async def preview_reference_unit_prompt(
+    project_name: str,
+    script_file: str,
+    item_id: str,
+    *,
+    projects: ProjectManager | None = None,
+    resolver: Any | None = None,
+) -> ReferencePromptPreview:
+    """渲染一个参考生视频单元的最终提示词，与执行期同一投影 / 渲染出口。
+
+    只读：不向供应商发请求、不产生费用、不写产物清单。投影阻断项（缺参考图、素材库关联未就绪、
+    声音开关冲突等）折算成 ``unavailable``，与 REST 的草稿预览同一口径；时长待确认不阻断文本预览。
+    """
+
+    manager = projects if projects is not None else get_project_manager()
+
+    def _load() -> tuple[dict[str, Any], dict[str, Any], Path]:
+        project = manager.load_project(project_name)
+        script = manager.load_script(project_name, script_file)
+        return project, script, manager.get_project_path(project_name)
+
+    project, script, project_path = await asyncio.to_thread(_load)
+    units = script.get("video_units")
+    unit = next(
+        (item for item in units if isinstance(item, dict) and str(item.get("unit_id")) == item_id),
+        None,
+    ) if isinstance(units, list) else None
+    if unit is None:
+        raise ScriptItemNotFound(item_id)
+
+    projection = await project_reference_unit_request(
+        project=project,
+        script=script,
+        unit=unit,
+        project_path=project_path,
+        resolver=resolver,
+    )
+    names = DisplayNames(
+        providers={},
+        models={},
+        deleted_provider=translate("deleted_provider_display_name"),
+    )
+    rendered = await asyncio.to_thread(
+        render_reference_prompt_preview,
+        project=project,
+        unit=unit,
+        project_path=project_path,
+        projection=projection,
+        translate=translate,
+        names=names,
+    )
+    return ReferencePromptPreview(
+        item_id=item_id,
+        content_mode=resolve_content_mode(script, project),
+        text=rendered["text"],
+        unavailable=rendered["unavailable"],
+        is_text_form=bool(rendered["is_text_form"]),
+        references=tuple(rendered["references"]),
+        warnings=tuple(rendered["warnings"]),
+    )
+
+
 __all__ = [
     "UNAVAILABLE_INVALID",
     "UNAVAILABLE_MISSING",
     "UNAVAILABLE_PENDING",
     "ItemPromptPreview",
+    "ReferencePromptPreview",
     "RenderedPrompt",
     "ScriptItemNotFound",
     "preview_item_prompts",
+    "preview_reference_unit_prompt",
 ]

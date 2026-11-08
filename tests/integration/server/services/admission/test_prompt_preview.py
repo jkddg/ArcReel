@@ -469,6 +469,48 @@ class TestPromptPreviewTool:
         assert outcome.problem is not None
         assert outcome.problem.code == "item_not_found"
 
+    async def test_reference_unit_preview_is_supported(self, tmp_path, monkeypatch):
+        """参考生视频正式剧本的 video_units 也能走同一 MCP 预览入口。"""
+
+        from tests.fakes import fake_reference_request_projector
+
+        project_path = prepare_files(tmp_path)
+        pm = _pm_for("drama", project_path)
+        pm.project["generation_mode"] = "reference_video"
+        pm.script = {
+            "episode": 1,
+            "content_mode": "drama",
+            "video_units": [
+                {
+                    "unit_id": "E1U1",
+                    "duration_seconds": 4,
+                    "text": "@[祠堂] 门口，@[Alice] 推门。\n@[Alice]{进来吧}",
+                }
+            ],
+        }
+        monkeypatch.setattr(
+            prompt_preview,
+            "project_reference_unit_request",
+            fake_reference_request_projector(durations=(4, 8)),
+        )
+
+        services = self._services(pm)
+        from server.tool_runtime import CallerContext, PromptPreviewRequest, ProjectScope, ToolRequest, get_prompt_preview
+
+        outcome = await get_prompt_preview(
+            ToolRequest(PromptPreviewRequest(script="episode_1.json", item_id="E1U1")),
+            ProjectScope(project_name="demo", data_root=project_path.parent),
+            CallerContext(user_id="default", source="mcp"),
+            services,
+        )
+
+        assert outcome.problem is None
+        assert outcome.value is not None
+        assert outcome.value.item_id == "E1U1"
+        assert outcome.value.text is not None
+        assert "<祠堂>@图片1" in outcome.value.text
+        assert any(ref["name"] == "祠堂" for ref in outcome.value.references)
+
     async def test_script_must_be_a_bare_filename(self, tmp_path, monkeypatch):
         project_path = prepare_files(tmp_path)
         pm = _pm_for("narration", project_path)

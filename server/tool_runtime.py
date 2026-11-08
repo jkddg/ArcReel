@@ -213,7 +213,13 @@ from server.draft_workflow import (
     PositiveEpisode,
     PromoteDraftRequest,
 )
-from server.services.admission.prompt_preview import ItemPromptPreview, ScriptItemNotFound, preview_item_prompts
+from server.services.admission.prompt_preview import (
+    ItemPromptPreview,
+    ReferencePromptPreview,
+    ScriptItemNotFound,
+    preview_item_prompts,
+    preview_reference_unit_prompt,
+)
 from server.services.admission.video_batch_admission import generation_action_for
 from server.services.project.episode_id_records import recorded_episode_ids_on
 from server.services.project.narration_settings import NarrationSettingsInput, new_project_narration_fields
@@ -1352,12 +1358,15 @@ async def get_prompt_preview(
     scope: ProjectScope,
     _caller: CallerContext,
     services: Services,
-) -> ToolOutcome[ItemPromptPreview]:
+) -> ToolOutcome[ItemPromptPreview | ReferencePromptPreview]:
     """渲染一个条目当前会送进图像 / 视频模型的最终提示词文本。
 
     与执行路径共用同一渲染出口，结果逐字等于本次生成实际发出的提示词。只读：不向供应商
     发请求、不产生费用、不写产物清单。``unavailable`` 是稳定的机器可读原因码，两个 host
     原样透传，UI 侧的成品文案由 REST 路由按请求语言渲染。
+
+    分镜骨架（segments / scenes / shots）返回分镜图与视频两侧；参考生视频返回单元正文、
+    参考图清单与 warnings（没有分镜图侧）。
     """
     filename = request.value.script
     if "/" in filename or "\\" in filename or filename in {".", ".."}:
@@ -1365,11 +1374,21 @@ async def get_prompt_preview(
     try:
         if problem := await migration_gate(scope, services):
             return ToolOutcome(problem=problem)
-        preview = await preview_item_prompts(
-            scope.project_name, filename, request.value.item_id, projects=services.projects
-        )
+        project = await asyncio.to_thread(services.projects.load_project, scope.project_name)
+        if is_reference_video_project(project):
+            preview: ItemPromptPreview | ReferencePromptPreview = await preview_reference_unit_prompt(
+                scope.project_name,
+                filename,
+                request.value.item_id,
+                projects=services.projects,
+                resolver=services.capabilities,
+            )
+        else:
+            preview = await preview_item_prompts(
+                scope.project_name, filename, request.value.item_id, projects=services.projects
+            )
     except ScriptItemNotFound:
-        return ToolOutcome(problem=ToolProblem("item_not_found", f"剧本中不存在分镜 {request.value.item_id}"))
+        return ToolOutcome(problem=ToolProblem("item_not_found", f"剧本中不存在条目 {request.value.item_id}"))
     except FileNotFoundError as exc:
         return ToolOutcome(problem=ToolProblem("file_not_found", str(exc)))
     except (TypeError, ValueError) as exc:

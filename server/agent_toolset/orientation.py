@@ -45,8 +45,10 @@ GET_VIDEO_CAPABILITIES = ToolDeclaration(
 GET_PROMPT_PREVIEW = ToolDeclaration(
     name="get_prompt_preview",
     description=(
-        "读取一个分镜条目最终会送进图像 / 视频模型的提示词文本，与执行路径同一渲染出口，逐字等于生成时实际"
-        "发出的提示词；某一侧提示词尚待生成或为空时，该侧带稳定的 unavailable 原因码而不是文本。"
+        "读取一个条目最终会送进图像 / 视频模型的提示词文本，与执行路径同一渲染出口，逐字等于生成时实际"
+        "发出的提示词。分镜条目（segment_id / scene_id / shot_id）返回分镜图侧与视频侧两份提示词；"
+        "参考生视频单元（unit_id）返回单元正文、本次请求的参考图清单与 warnings，不分图像 / 视频两侧。"
+        "某一侧提示词尚待生成或为空时，该侧带稳定的 unavailable 原因码而不是文本。"
         "只读：不向供应商发请求、不产生费用。项目数据升级失败时返回 project_migration_failed problem。"
     ),
     request_model=PromptPreviewRequest,
