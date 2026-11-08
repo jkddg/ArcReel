@@ -1358,7 +1358,15 @@ class ConfigResolver:
             svc, session, project, _VIDEO_LAYERED_KEYS[generation_type]
         )
         selected = ProviderModel(provider_id, model_id)
-        await self._ensure_video_bucket_capability(session, selected, generation_type)
+        await self._ensure_video_bucket_capability(
+            session,
+            selected,
+            generation_type,
+            # i2v 桶的请求形态随项目模式不同：storyboard 带分镜图首帧，要求模型支持首帧；
+            # 参考生视频的单元没有首帧字段，无参考图的单元实际是纯文生，要求模型支持文生。
+            # 无项目上下文时按 storyboard 保守判定。
+            has_image=caps_generation_mode(project) != "reference_video",
+        )
         return selected
 
     async def _ensure_video_identity_resolvable(
@@ -1415,6 +1423,8 @@ class ConfigResolver:
         session: AsyncSession,
         selected: ProviderModel,
         generation_type: VideoGenerationType,
+        *,
+        has_image: bool = True,
     ) -> None:
         """能力闸：校验解析出的模型具备该桶所需能力，不满足直接报错、不静默换模型。
 
@@ -1423,6 +1433,10 @@ class ConfigResolver:
         ``_ensure_video_identity_resolvable``，悬空引用（模型被删 /
         能力被事后修改 / 供应商被删 / endpoint 变更）在此统一报错兜底，写入侧不拦截、不级联清理
         （``docs/adr/0054``）。
+
+        ``has_image`` 指 i2v 桶这次请求是否带图：storyboard 的 i2v 请求带分镜图首帧；参考生视频的
+        单元没有首帧字段，无参考图的单元实际是纯文生。它决定 i2v 桶要求 ``first_frame`` 还是
+        ``text_to_video``，与 ``request_projection`` 的投影判据同口径。
         """
         provider_id, model_id = selected.provider_id, selected.model_id
         model = await self._ensure_video_identity_resolvable(session, selected, generation_type)
@@ -1455,6 +1469,7 @@ class ConfigResolver:
             first_frame=caps.first_frame,
             max_reference_images=caps.max_reference_images,
             text_to_video=caps.text_to_video,
+            has_image=has_image,
         )
         if not satisfied:
             raise _video_bucket_capability_missing(generation_type, provider_id, model_id)

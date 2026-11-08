@@ -34,8 +34,8 @@ from arcreel_market_core.comfyui.workflow import is_link, node_inputs
 
 from .inference_rules import AudioTrackSource, load_inference_rules
 
-#: 决定「有没有图输入」的三项语义键。三项全空即这份 workflow 不吃任何图片素材。
-_IMAGE_BINDING_KEYS = ("start_image", "end_image", "reference_images")
+#: 必需输入性质的关键帧绑定：绑了首帧或尾帧，这份工作流就不能退化为纯文生。
+_KEYFRAME_BINDING_KEYS = ("start_image", "end_image")
 
 #: 音轨的两种结论，取值与 :class:`arcreel_market_core.video_backend_contract.VideoAudioMode` 的成员值逐字相同。
 #: 永远不会是 ``controllable``：ComfyUI 侧没有可下发的音轨开关。
@@ -67,13 +67,19 @@ class BindingCapabilities:
 
 
 def derive_video_capabilities(definition: Mapping[str, Any]) -> BindingCapabilities:
-    """把一份视频端点定义的绑定表翻译成能力位。纯函数：不看模型名，不读库。"""
+    """把一份视频端点定义的绑定表翻译成能力位。纯函数：不看模型名，不读库。
+
+    ``text_to_video`` 只由首尾帧绑定决定：首尾帧是必需输入，绑了就不能纯文生；参考图是
+    可选的 Autogrow 素材（0..N 张），有槽不代表必须给图——参考生视频模型（如 MiniMax H3
+    ref2va）在没有参考图时退化为纯文生，不能因为绑了参考图就报 ``text_to_video=False``，
+    否则没有参考图的单元会卡在 i2v 桶的能力闸上。
+    """
     bindings: Mapping[str, Any] = definition["bindings"]
     workflow: Mapping[str, Any] = definition["workflow"]
-    has_image_input = any(targets_of(bindings.get(key)) for key in _IMAGE_BINDING_KEYS)
+    keyframe_bound = any(targets_of(bindings.get(key)) for key in _KEYFRAME_BINDING_KEYS)
     audio_targets = targets_of(bindings.get("reference_audio"))
     return BindingCapabilities(
-        text_to_video=not has_image_input,
+        text_to_video=not keyframe_bound,
         first_frame=bool(targets_of(bindings.get("start_image"))),
         last_frame=bool(targets_of(bindings.get("end_image"))),
         max_reference_images=len(targets_of(bindings.get("reference_images"))),

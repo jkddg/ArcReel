@@ -369,7 +369,14 @@ def _apply_media(
     doomed.extend(
         _apply_reference_images(workflow, _targets(bindings.get("reference_images")), media.reference_images, rules)
     )
-    _apply_reference_audio(workflow, _targets(bindings.get("reference_audio")), media.reference_audios)
+    doomed.extend(
+        _apply_reference_audio(
+            workflow,
+            _targets(bindings.get("reference_audio")),
+            media.reference_audios,
+            rules,
+        )
+    )
     if not doomed:
         return ()
     return _drop_nodes(workflow, doomed, output_nodes=_output_nodes(bindings), rules=rules)
@@ -420,16 +427,26 @@ def _apply_reference_audio(
     workflow: dict[str, Any],
     targets: Sequence[Mapping[str, Any]],
     values: Sequence[str],
-) -> None:
-    """按段数填参考音频，只填前 N 个目标。
+    rules: InferenceRules,
+) -> list[str]:
+    """按段数填参考音频，回传没有素材可填的读音频节点。
 
-    参考音频没有「张数不足就重复上一张」的语义：重复一段音色参考不会加强约束，只会在参考
-    序列里多出一段同源素材。目标多于本次携带的段数时，多余的格保留下发文件里的字面占位值
-    （部署侧应放入静音音频），不做删节点处理——参考音频挂在可选入口上，删除级联的收益与
-    风险不成比例。
+    与参考图同一套「不足即改图」规则，但不重复最后一段：重复一段音色参考不会加强约束，只会
+    在参考序列里多出一段同源素材。没有素材可填的读音频节点必须删掉——留下会按底稿字面值去读
+    一段占位音频，模型拿它当参考素材，等于凭空多了一个音色条件。前提是认得这个节点接到的那个
+    入口（``consumer``）；没记下或落在可选入口规则之外时不做删改，宁可留着底稿也不凭猜测把
+    一个必需输入摘掉。
     """
-    for index in range(min(len(targets), len(values))):
+    filled = min(len(targets), len(values))
+    for index in range(filled):
         _write_one(workflow, targets[index], values[index])
+    spare = targets[filled:]
+    if not spare:
+        return []
+    if any(not _adjustable(target, rules) for target in spare):
+        logger.info("参考音频格子 %d 个、本次 %d 段，但有格子的 consumer 改不动图，改图跳过", len(targets), len(values))
+        return []
+    return [str(target["node"]) for target in spare]
 
 
 def _output_nodes(bindings: Mapping[str, Any]) -> frozenset[str]:
