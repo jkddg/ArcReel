@@ -123,6 +123,10 @@ _ITEM_ARRAYS = (("segments", "segment_id"), ("scenes", "scene_id"), ("shots", "s
 _ASSET_TYPE_BY_BUCKET = {spec.bucket_key: asset_type for asset_type, spec in ASSET_SPECS.items()}
 _SEGMENT_RESOURCE_TYPES = frozenset({"storyboards", "videos", "audio", END_FRAME_RESOURCE_TYPE})
 _ASSET_RESOURCE_TYPES = frozenset({*_ASSET_TYPE_BY_BUCKET, CHARACTER_DERIVATIVE_RESOURCE_TYPE})
+#: 资产字符串字段里真正指向项目内文件的那些。``extra_string_fields`` 同时承载纯文本
+#: （voice_style / voice_notice_dismissed_at），只有这里列出的才进文件索引——文本当成路径
+#: 去探测磁盘会因超长文件名抛 OSError。
+_REFERENCE_PATH_FIELDS = frozenset({"reference_image", "reference_audio", "reference_images"})
 #: 每集草稿目录里由工作流持有的文件：隔离草稿，以及分集视图会读取的脚本规划（含旧版 ``.md``）。
 _EPISODE_DRAFT_FILENAMES = tuple(
     dict.fromkeys(
@@ -273,7 +277,7 @@ class ReferenceIndex:
                     return rel
                 parts.append(actual.name)
                 directory = actual
-        except (FileNotFoundError, NotADirectoryError):
+        except OSError:
             return rel
         return "/".join(parts)
 
@@ -296,7 +300,19 @@ class ReferenceIndex:
                     continue
                 owner = FileOwner("asset", id=str(name), asset_type=asset_type)
                 self._resources.add((spec.bucket_key, normalize_asset_name(str(name))))
-                for field in (spec.sheet_field, *spec.extra_string_fields, *spec.original_image_fields):
+                # 只索引真正的文件路径字段：``extra_string_fields`` 里还混着 voice_style /
+                # voice_notice_dismissed_at 这类纯文本，把它们当路径去探测磁盘会因超长文件名
+                # 抛 OSError（voice_style 本就是整段文字，长度不受文件名约束）。
+                path_fields = (
+                    spec.sheet_field,
+                    *spec.original_image_fields,
+                    *(
+                        field
+                        for field in spec.extra_string_fields
+                        if field in _REFERENCE_PATH_FIELDS
+                    ),
+                )
+                for field in path_fields:
                     for value in _as_list(asset.get(field)):
                         self._mark(value, FileRole.REFERENCED, owner)
                 derivatives = asset.get(DERIVATIVES_FIELD) if spec.supports_derivatives else None
