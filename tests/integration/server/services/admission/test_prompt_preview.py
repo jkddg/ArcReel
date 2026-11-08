@@ -495,7 +495,13 @@ class TestPromptPreviewTool:
         )
 
         services = self._services(pm)
-        from server.tool_runtime import CallerContext, PromptPreviewRequest, ProjectScope, ToolRequest, get_prompt_preview
+        from server.tool_runtime import (
+            CallerContext,
+            ProjectScope,
+            PromptPreviewRequest,
+            ToolRequest,
+            get_prompt_preview,
+        )
 
         outcome = await get_prompt_preview(
             ToolRequest(PromptPreviewRequest(script="episode_1.json", item_id="E1U1")),

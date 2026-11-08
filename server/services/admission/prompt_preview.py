@@ -271,10 +271,14 @@ async def preview_reference_unit_prompt(
 
     project, script, project_path = await asyncio.to_thread(_load)
     units = script.get("video_units")
-    unit = next(
-        (item for item in units if isinstance(item, dict) and str(item.get("unit_id")) == item_id),
-        None,
-    ) if isinstance(units, list) else None
+    unit = (
+        next(
+            (item for item in units if isinstance(item, dict) and str(item.get("unit_id")) == item_id),
+            None,
+        )
+        if isinstance(units, list)
+        else None
+    )
     if unit is None:
         raise ScriptItemNotFound(item_id)
 
